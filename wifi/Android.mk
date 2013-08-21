@@ -56,6 +56,9 @@ ifeq ($(BOARD_WLAN_VENDOR),ATHEROS)
   LOCAL_C_INCLUDES += $(LOCAL_PATH)/../../external/wpa_supplicant_ath/wpa_supplicant/src/common
   LOCAL_CFLAGS += -DBOARD_HAS_ATH_WLAN=\"$(BOARD_HAS_ATH_WLAN)\"
   LOCAL_SRC_FILES += wifi/wifi_ath.c
+else ifeq ($(BOARD_WLAN_VENDOR), MRVL)
+  LOCAL_CFLAGS += -DMRVL_WIFI
+  LOCAL_SRC_FILES += wifi/wifi_mrvl.c
 else ifeq ($(BOARD_WLAN_VENDOR), REALTEK)
   LOCAL_SRC_FILES += ../realtek/wlan/libhardware_legacy/wifi/wifi_realtek.c
 else
