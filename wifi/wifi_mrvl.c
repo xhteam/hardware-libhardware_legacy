@@ -73,17 +73,6 @@ static char primary_iface[PROPERTY_VALUE_MAX];
 #endif
 #define WIFI_TEST_INTERFACE		"sta"
 
-#ifdef MRVL_WIFI
-#ifndef WIFI_DRIVER_FW_PATH_STA
-#define WIFI_DRIVER_FW_PATH_STA		"fwsta"
-#endif
-#ifndef WIFI_DRIVER_FW_PATH_AP
-#define WIFI_DRIVER_FW_PATH_AP		"fwsoftap"
-#endif
-#ifndef WIFI_DRIVER_FW_PATH_P2P
-#define WIFI_DRIVER_FW_PATH_P2P		"fwp2p"
-#endif
-#else
 #ifndef WIFI_DRIVER_FW_PATH_STA
 #define WIFI_DRIVER_FW_PATH_STA		NULL
 #endif
@@ -92,7 +81,6 @@ static char primary_iface[PROPERTY_VALUE_MAX];
 #endif
 #ifndef WIFI_DRIVER_FW_PATH_P2P
 #define WIFI_DRIVER_FW_PATH_P2P		NULL
-#endif
 #endif
 
 #ifndef WIFI_DRIVER_FW_PATH_PARAM
@@ -213,6 +201,7 @@ int is_wifi_driver_loaded() {
     char line[sizeof(DRIVER_MODULE_TAG)+10];
 #endif
 
+
     if (!property_get(DRIVER_PROP_NAME, driver_status, NULL)
             || strcmp(driver_status, "ok") != 0) {
         return 0;  /* driver not loaded */
@@ -254,8 +243,7 @@ int wifi_load_driver()
     }
 	
 	#ifdef WIFI_SDIO_IF_DRIVER_MODULE_PATH
-    if (insmod(DRIVER_SDIO_IF_MODULE_PATH, DRIVER_SDIO_IF_MODULE_ARG) < 0)
-        return -1;
+    insmod(DRIVER_SDIO_IF_MODULE_PATH, DRIVER_SDIO_IF_MODULE_ARG);
 	#endif
 	
     if (insmod(DRIVER_MODULE_PATH, DRIVER_MODULE_ARG) < 0)
@@ -269,6 +257,7 @@ int wifi_load_driver()
         property_set("ctl.start", FIRMWARE_LOADER);
     }
     sched_yield();
+
     while (count-- > 0) {
         if (property_get(DRIVER_PROP_NAME, driver_status, NULL)) {
             if (strcmp(driver_status, "ok") == 0)
@@ -291,6 +280,9 @@ int wifi_load_driver()
 
 int wifi_unload_driver()
 {
+	#ifdef MRVL_WIFI
+	return 0;
+	#endif
     usleep(200000); /* allow to finish interface down */
 #ifdef WIFI_DRIVER_MODULE_PATH
     if (rmmod(DRIVER_MODULE_NAME) == 0) {
