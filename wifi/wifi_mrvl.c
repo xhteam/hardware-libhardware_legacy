@@ -37,6 +37,10 @@
 #include <sys/_system_properties.h>
 #endif
 
+#ifdef MRVL_WIRELESS_DAEMON_API
+#include "marvell_wireless.h"
+#endif
+
 /* PRIMARY refers to the connection on the primary interface
  * SECONDARY refers to an optional connection on a p2p interface
  *
@@ -234,7 +238,12 @@ int is_wifi_driver_loaded() {
 
 int wifi_load_driver()
 {
-#ifdef WIFI_DRIVER_MODULE_PATH
+#ifdef MRVL_WIRELESS_DAEMON_API
+	int ret = 0;
+	ret = wifi_enable();
+	if(ret)wifi_disable();
+	return ret;
+#elif defined(WIFI_DRIVER_MODULE_PATH)
     char driver_status[PROPERTY_VALUE_MAX];
     int count = 100; /* wait at most 20 seconds for completion */
 
@@ -280,11 +289,13 @@ int wifi_load_driver()
 
 int wifi_unload_driver()
 {
-	#ifdef MRVL_WIFI
+#ifdef MRVL_WIRELESS_DAEMON_API
 	return 0;
-	#endif
+//	return wifi_disable();
+#elif defined(MRVL_WIFI)
+	return 0;
+#elif defined(WIFI_DRIVER_MODULE_PATH)
     usleep(200000); /* allow to finish interface down */
-#ifdef WIFI_DRIVER_MODULE_PATH
     if (rmmod(DRIVER_MODULE_NAME) == 0) {
         int count = 20; /* wait at most 10 seconds for completion */
         while (count-- > 0) {
