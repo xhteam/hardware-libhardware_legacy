@@ -56,6 +56,7 @@ static struct wpa_ctrl *monitor_conn[MAX_CONNS];
 
 /* socket pair used to exit from a blocking read */
 static int exit_sockets[MAX_CONNS][2];
+static int Dbg = 0;
 
 extern int do_dhcp();
 extern int ifc_init();
@@ -129,6 +130,9 @@ static unsigned char dummy_key[21] = { 0x02, 0x11, 0xbe, 0x33, 0x43, 0x35,
 static char supplicant_name[PROPERTY_VALUE_MAX];
 /* Is either SUPP_PROP_NAME or P2P_PROP_NAME */
 static char supplicant_prop_name[PROPERTY_KEY_MAX];
+static char service_dynamic_args[PROPERTY_VALUE_MAX];
+
+void wifi_close_sockets(int index);
 
 static int is_primary_interface(const char *ifname)
 {
@@ -239,10 +243,11 @@ int is_wifi_driver_loaded() {
 
 int wifi_load_driver()
 {
-	int ret = 0;
-	ret = wifi_enable();
-	if(ret)wifi_disable();
-	return ret;
+    int ret = 0;
+    ret = wifi_enable();
+    ALOGD("wifi_enable, ret: 0x%x", ret);
+    if(ret)wifi_disable();
+    return ret;
 }
 
 int wifi_unload_driver()
@@ -509,30 +514,6 @@ int ensure_config_file_exists(const char *config_file)
     return update_ctrl_interface(config_file);
 }
 
-static void wifi_close_sockets(int index)
-{
-    if (ctrl_conn[index] != NULL) {
-        wpa_ctrl_close(ctrl_conn[index]);
-        ctrl_conn[index] = NULL;
-    }
-
-    if (monitor_conn[index] != NULL) {
-        wpa_ctrl_close(monitor_conn[index]);
-        monitor_conn[index] = NULL;
-    }
-
-    if (exit_sockets[index][0] >= 0) {
-        close(exit_sockets[index][0]);
-        exit_sockets[index][0] = -1;
-    }
-
-    if (exit_sockets[index][1] >= 0) {
-        close(exit_sockets[index][1]);
-        exit_sockets[index][1] = -1;
-    }
-}
-
-
 /**
  * wifi_wpa_ctrl_cleanup() - Delete any local UNIX domain socket files that
  * may be left over from clients that were previously connected to
@@ -576,6 +557,7 @@ int wifi_start_supplicant(int p2p_supported)
 {
     char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
     int count = 200; /* wait at most 20 seconds for completion */
+    char start_cmd[PROPERTY_VALUE_MAX] = {'\0'};
 #ifdef HAVE_LIBC_SYSTEM_PROPERTIES
     const prop_info *pi;
     unsigned serial = 0, i;
@@ -635,7 +617,19 @@ int wifi_start_supplicant(int p2p_supported)
 #endif
     property_get("wifi.interface", primary_iface, WIFI_TEST_INTERFACE);
 
-    property_set("ctl.start", supplicant_name);
+    /* The total length should shorter than [PROPERTY_VALUE_MAX - 1 - strlen(":-") ]*/
+    if ((strlen(service_dynamic_args) + strlen(supplicant_name)) >= (PROPERTY_VALUE_MAX - strlen(":-"))) {
+        ALOGE("Failed to set dynamical argument for supplicant: the argument[%s] is too long!", service_dynamic_args);
+        memset(service_dynamic_args, 0, sizeof(service_dynamic_args));
+    }
+
+    if (strlen(service_dynamic_args) == 0) {
+        strcpy(start_cmd, supplicant_name);
+    } else {
+        snprintf(start_cmd, sizeof(start_cmd), "%s:-%s", supplicant_name, service_dynamic_args);
+    }
+
+    property_set("ctl.start", start_cmd);
     sched_yield();
 
     while (count-- > 0) {
@@ -754,6 +748,75 @@ int wifi_connect_to_supplicant(const char *ifname)
     }
 }
 
+#define UTF8_2_BYTE_SIZE_MASK   0xE0
+#define UTF8_2_BYTE_HEADER      0xC0
+#define UTF8_3_BYTE_SIZE_MASK   0xF0
+#define UTF8_3_BYTE_HEADER              0xE0
+#define UTF8_SBU_MASK                   0xC0
+#define UTF8_SBU_HEADER                 0x80
+
+static int has_no_utf8_char(char *buf, int len)
+{
+    char *p = buf;
+
+        while (p - buf < len) {
+        if (p[0] & 0x80) {
+            if ((p[0] & UTF8_2_BYTE_SIZE_MASK) == UTF8_2_BYTE_HEADER) {
+                if ((p[1] & UTF8_SBU_MASK) == UTF8_SBU_HEADER) {
+                    p += 2;
+                } else {
+                    return 1;
+                }
+            } else if ((p[0] & UTF8_3_BYTE_SIZE_MASK) == UTF8_3_BYTE_HEADER) {
+                if (((p[1] & UTF8_SBU_MASK) == UTF8_SBU_HEADER) && ((p[2] & UTF8_SBU_MASK) == UTF8_SBU_HEADER)) {
+                    p += 3;
+                } else {
+                    return 1;
+                }
+            } else {
+                return 1;
+            }
+        } else {
+            p++;
+        }
+    }
+    return 0;
+}
+
+static void filter_no_utf8_ssid(char *reply, size_t *reply_len)
+{
+    char *reply_begin, *reply_end, *ap_begin, *ap_end;
+    char *p1, *p2;
+    int aps = 0, ap_info_len;
+
+    reply_begin = reply;
+    reply_end = reply + *reply_len;
+
+    for (ap_begin = reply, ap_end = reply; ap_end <= reply_end; ap_end++) {
+        if (ap_end == reply_end || *ap_end == '\n') {
+            aps++;
+            if (aps == 1) {
+                ap_begin = ap_end + 1;
+                continue;
+            }
+            if (ap_end > ap_begin) {
+                ap_info_len = ap_end - ap_begin;
+                if (has_no_utf8_char(ap_begin, ap_info_len)) {
+                    /* discard the no utf8 ssid ap */
+                    for (p1 = ap_begin, p2 = ap_end + 1; p2 <= reply_end; p1++, p2++) {
+                       *p1 = *p2;
+                    }
+                    reply_end -= ap_info_len;
+                    *reply_len = *reply_len - ap_info_len;
+                    ap_end = ap_begin;
+                } else {
+                    ap_begin = ap_end + 1;
+                }
+            }
+        }
+    }
+}
+
 int wifi_send_command(int index, const char *cmd, char *reply, size_t *reply_len)
 {
     int ret;
@@ -768,11 +831,23 @@ int wifi_send_command(int index, const char *cmd, char *reply, size_t *reply_len
         /* unblocks the monitor receive socket for termination */
         TEMP_FAILURE_RETRY(write(exit_sockets[index][0], "T", 1));
         return -2;
-    } else if (ret < 0 || strncmp(reply, "FAIL", 4) == 0) {
+    } else if (ret < 0) {
+        ALOGD("Fail to implement command '%s'.\n", cmd);
+        /* unblocks the monitor receive socket for termination */
+        TEMP_FAILURE_RETRY(write(exit_sockets[index][0], "T", 1));
+        return -2;
+    } else if (strncmp(reply, "FAIL", 4) == 0) {
         return -1;
     }
     if (strncmp(cmd, "PING", 4) == 0) {
         reply[*reply_len] = '\0';
+    }
+    if (Dbg)
+    {
+        ALOGD("wifi_send command: send [%s] to wpa_supplicant successfully!", cmd);
+    }
+    if (strncmp(cmd, "SCAN_RESULTS", 12) == 0) {
+        filter_no_utf8_ssid(reply, reply_len);
     }
     return 0;
 }
@@ -839,6 +914,8 @@ int wifi_wait_on_socket(int index, char *buf, size_t buflen)
         return strlen(buf);
     }
     buf[nread] = '\0';
+    if (Dbg) ALOGD("wait_for_event: result=%d nread=%d string=\"%s\"\n", result, nread, buf);
+
     /* Check for EOF on the socket */
     if (result == 0 && nread == 0) {
         /* Fabricate an event to pass up */
@@ -876,6 +953,28 @@ int wifi_wait_for_event(const char *ifname, char *buf, size_t buflen)
     }
 }
 
+void wifi_close_sockets(int index)
+{
+    if (ctrl_conn[index] != NULL) {
+        wpa_ctrl_close(ctrl_conn[index]);
+        ctrl_conn[index] = NULL;
+    }
+
+    if (monitor_conn[index] != NULL) {
+        wpa_ctrl_close(monitor_conn[index]);
+        monitor_conn[index] = NULL;
+    }
+
+    if (exit_sockets[index][0] >= 0) {
+        close(exit_sockets[index][0]);
+        exit_sockets[index][0] = -1;
+    }
+
+    if (exit_sockets[index][1] >= 0) {
+        close(exit_sockets[index][1]);
+        exit_sockets[index][1] = -1;
+    }
+}
 
 void wifi_close_supplicant_connection(const char *ifname)
 {
@@ -931,6 +1030,9 @@ int wifi_change_fw_path(const char *fwpath)
     int len;
     int fd;
     int ret = 0;
+	#ifdef MRVL_WIRELESS_DAEMON_API
+	return ret;
+	#endif
     if (!fwpath)
         return ret;
     fd = TEMP_FAILURE_RETRY(open(WIFI_DRIVER_FW_PATH_PARAM, O_WRONLY));
@@ -945,4 +1047,41 @@ int wifi_change_fw_path(const char *fwpath)
     }
     close(fd);
     return ret;
+}
+
+/* Set Marvell HAL Debug Log */
+void setDbg(int dbgLevel)
+{
+    Dbg = (int)(dbgLevel <= 2 ? 1:0);
+}
+
+/* Return 0 if succeed, < 0 if failed. */
+int bt_set_drvarg(const char * bt_drv_arg) {
+#ifdef MARVELL_WIFI
+    return bt_set_drv_arg(bt_drv_arg);
+#else
+    return 0;
+#endif
+}
+
+/* Return 0 if succeed, < 0 if failed. */
+int wifi_set_drvarg(const char * wifi_drv_arg){
+#ifdef MARVELL_WIFI
+    return wifi_set_drv_arg(wifi_drv_arg);
+#else
+    return 0;
+#endif
+}
+
+/* Set supplicant Debug Log */
+int wifi_set_svc_args(const char * svc_args)
+{
+    if (strlen(svc_args) >= PROPERTY_VALUE_MAX) {
+        ALOGE("The supplicant arg[%s] is too long( >= %d )!", svc_args, PROPERTY_VALUE_MAX);
+        return -1;
+    }
+    memset(service_dynamic_args, 0, PROPERTY_VALUE_MAX);
+    strcpy(service_dynamic_args, svc_args);
+
+    return 0;
 }
