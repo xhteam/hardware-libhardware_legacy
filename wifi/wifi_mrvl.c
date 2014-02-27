@@ -1030,9 +1030,7 @@ int wifi_change_fw_path(const char *fwpath)
     int len;
     int fd;
     int ret = 0;
-	#ifdef MRVL_WIRELESS_DAEMON_API
-	return ret;
-	#endif
+	
     if (!fwpath)
         return ret;
     fd = TEMP_FAILURE_RETRY(open(WIFI_DRIVER_FW_PATH_PARAM, O_WRONLY));
