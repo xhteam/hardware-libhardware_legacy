@@ -62,7 +62,7 @@ else ifeq ($(BOARD_WLAN_VENDOR), MRVL)
   #comment below lines if you want to module operation on wifi_mrvl.c,otherwise we will operate wifi through marvell wireless daemon
   ifeq ($(MRVL_WIRELESS_DAEMON_API),true)
   LOCAL_CFLAGS += -DMRVL_WIRELESS_DAEMON_API
-  LOCAL_C_INCLUDES += hardware/marvell/wlan/MarvellWirelessDaemon
+  LOCAL_C_INCLUDES += hardware/marvell/wlan/libMarvellWireless
   LOCAL_SHARED_LIBRARIES += libMarvellWireless
   endif
 else ifeq ($(BOARD_WLAN_VENDOR), REALTEK)
